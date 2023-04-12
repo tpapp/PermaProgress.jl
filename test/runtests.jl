@@ -44,3 +44,10 @@ end
     @test l[2][1] ≂ StageSpec(; label = "stage super α")
     @test l[2][2] ≂ [LogEntry(; step = 0)]
 end
+
+@testset "seconds/step estimate basic consistency" begin
+    log_entries = [LogEntry(time_ns = exp10(9) * i, step = i) for i in 1:10]
+    e = estimate_seconds_per_step(log_entries)
+    @test e.seconds_per_step == 1.0
+    @test e.last_step == 10
+end

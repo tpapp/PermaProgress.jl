@@ -101,6 +101,22 @@ function _read_entry(io::IO)
     end
 end
 
+"""
+$(SIGNATURES)
+
+Check that `time_ns` properties of the elements in the vector are ascending.
+"""
+function _is_ascending_time_ns(log_entries::AbstractVector)
+    isempty(log_entries) && return true
+    t0 = log_entries[1].time_ns
+    for e in @view log_entries[2:end]
+        t = e.time_ns
+        t - t0 ≥ 0 && return false # difference because of wrap-around
+        t0 = t
+    end
+    true
+end
+
 function parse_file_v1(io::IO)
     current_stage = 1
     stages = Vector{Pair{StageSpec,Vector{LogEntry}}}()
@@ -119,6 +135,11 @@ function parse_file_v1(io::IO)
             _log_entry(entry)
         else
             error("internal error")
+        end
+    end
+    for stage in stages
+        if !_is_ascending_time_ns(stage[2])
+            error("non-ascending time entries in stage $(stage.label)")
         end
     end
     stages
