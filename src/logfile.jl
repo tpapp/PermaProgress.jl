@@ -2,7 +2,7 @@
 ##### parsing logfiles
 #####
 
-export add_stage, log_entry, next_stage, add_next_stage
+export add_stage, log_entry, next_stage, add_next_stage, computation_done, is_computation_done
 
 ####
 #### logfile data
@@ -26,10 +26,14 @@ const MAX_STRING_LEN = 120
 const SUPPORTED_NUMERIC_TYPES = Union{Float64,Int16,Int64,UInt64}
 
 "Sentinel value for starting another stage."
-const STEP_NEXTSTAGE = -1
+const STEP_NEXT_STAGE = -1
 
 "Sentinel value for unknown total steps."
 const TOTAL_STEPS_UNKNOWN = -1
+
+"Sentinel value for a stage that ends computation."
+const TOTAL_STEPS_COMPUTATION_DONE = -2
+
 
 """
 $(SIGNATURES)
@@ -73,7 +77,7 @@ end
 Base.@kwdef struct StageSpec
     "label for the stage, always present (but may be empty)"
     label::String
-    "total steps, [`TOTAL_STEPS_UNKNOWN`](@ref) if unknown."
+    "total steps, negative values are sentinels (see above)."
     total_steps::Int64 = TOTAL_STEPS_UNKNOWN
 end
 
@@ -95,7 +99,7 @@ $(FIELDS)
 Base.@kwdef struct LogEntry
     "timestap in nanoseconds (cf [`time_ns`](@ref), always present"
     time_ns::UInt64 = time_ns()
-    "step, always provided. special values: `STEP_NEXTSTAGE` for starting a stage, `0` for completing initialization of a stage."
+    "step, always provided. special values: `STEP_NEXT_STAGE` for starting a stage, `0` for completing initialization of a stage."
     step::Int64
     "distance metric, used for estimation when total steps are not known or applicable."
     distance::Float64 = NaN
@@ -152,8 +156,12 @@ function parse_file_v1(io::IO)
         entry = _read_entry(io)
         if entry isa StageSpec
             _add_stage(entry)
+            if entry.total_steps == TOTAL_STEPS_COMPUTATION_DONE
+                eof(io) && @warn "Computation done, but logfile has remaining entries."
+                break
+            end
         elseif entry isa LogEntry
-            if entry.step == STEP_NEXTSTAGE
+            if entry.step == STEP_NEXT_STAGE
                 l = length(stages)
                 current_stage ≥ l && _add_stage(StageSpec(; label = "stage $(l + 1)"))
                 current_stage += 1
@@ -183,6 +191,8 @@ function parse_file(io::IO)
 end
 
 parse_file(pathname::AbstractString) = open(parse_file, pathname; read = true)
+
+is_computation_done(stages) = stages[end][1].total_steps == TOTAL_STEPS_COMPUTATION_DONE
 
 ####
 #### writing
@@ -217,10 +227,16 @@ function log_entry(pathname::AbstractString; step, skip_check = false, distance 
 end
 
 function next_stage(pathname::AbstractString; skip_check::Bool = false)
-    _write_entry(pathname, LogEntry(; time_ns = time_ns(), step = STEP_NEXTSTAGE); skip_check)
+    _write_entry(pathname, LogEntry(; time_ns = time_ns(), step = STEP_NEXT_STAGE); skip_check)
 end
 
 function add_next_stage(pathname::AbstractString; skip_check = false, label = "", total_steps = TOTAL_STEPS_UNKNOWN)
     add_stage(pathname; label, total_steps, skip_check)
     next_stage(pathname; skip_check = true)
+end
+
+function computation_done(pathname::AbstractString; skip_check = false)
+    _write_entry(pathname, StageSpec(; label = "computation done", total_steps = TOTAL_STEPS_COMPUTATION_DONE);
+                 skip_check)
+    _write_entry(pathname, LogEntry(; time_ns = time_ns(), step = 0))
 end

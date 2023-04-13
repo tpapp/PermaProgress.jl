@@ -1,6 +1,6 @@
 using PermaProgress
 using Test
-using PermaProgress: LogEntry, StageSpec, TOTAL_STEPS_UNKNOWN, STEP_NEXTSTAGE
+using PermaProgress: LogEntry, StageSpec, TOTAL_STEPS_UNKNOWN, STEP_NEXT_STAGE
 
 const PATH = joinpath(@__DIR__, "test.log")
 
@@ -38,11 +38,13 @@ end
     add_stage(PATH; label = "stage 1", total_steps = 200)
     log_entry(PATH; step = 8)
     add_next_stage(PATH; label = "stage super α")
+    computation_done(PATH)
     l = PermaProgress.parse_file(PATH)
     @test l[1][1] ≂ StageSpec(; label = "stage 1", total_steps = 200)
     @test l[1][2] ≂ [LogEntry(; step = 8)]
     @test l[2][1] ≂ StageSpec(; label = "stage super α")
-    @test l[2][2] ≂ [LogEntry(; step = STEP_NEXTSTAGE)]
+    @test l[2][2] ≂ [LogEntry(; step = STEP_NEXT_STAGE)]
+    @test is_computation_done(l)
 end
 
 @testset "seconds/step estimate basic consistency" begin
