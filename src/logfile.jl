@@ -8,19 +8,49 @@ export add_stage, log_entry, next_stage, add_next_stage
 #### logfile data
 ####
 
+"Header string, all binary logfiles start with this."
 const HEADER = "PermaProgress.jl logfile"
 
+"""
+Current version of logfile binary format.
+
+!!! note
+    Versioning will only be taken seriously after the 1.0 release of this library, until then, format changes freely.
+"""
 const CURRENT_VERSION = Int64(1)
 
+"Maximum string length. For strings longer than this, reading may error."
 const MAX_STRING_LEN = 120
 
+"Supported numeric types."
 const SUPPORTED_NUMERIC_TYPES = Union{Float64,Int16,Int64,UInt64}
 
+"Sentinel value for starting another stage."
+const STEP_NEXTSTAGE = -1
+
+"Sentinel value for unknown total steps."
+const TOTAL_STEPS_UNKNOWN = -1
+
+"""
+$(SIGNATURES)
+
+A version of `write` for all the types we use. Numbers are written in low-endian format.
+"""
 _write(io::IO, x::SUPPORTED_NUMERIC_TYPES) = write(io, htol(x))
 
+"""
+$(SIGNATURES)
+
+Read data written by [`_write`](@ref).
+"""
 _read(io::IO, ::Type{T}) where {T <: SUPPORTED_NUMERIC_TYPES} = ltoh(read(io, T))
 
-function _write(io, str::String)
+"""
+$(SIGNATURES)
+
+Write the length of the string as an `UInt16`, then the UTF-8 codeunits.
+"""
+function _write(io::IO, str::String)
     len = ncodeunits(str)
     if len > MAX_STRING_LEN
         len = MAX_STRING_LEN
@@ -32,16 +62,19 @@ function _write(io, str::String)
     write(io, @view codeunits(str)[1:len])
 end
 
-function _read(io, ::Type{String})
+_write(io::IO, str::AbstractString) = _write(io, String(str))
+
+function _read(io::IO, ::Type{String})
     n = _read(io, Int16)
     n > MAX_STRING_LEN && error("string too long")
     String(read(io, n))
 end
 
 Base.@kwdef struct StageSpec
-    "label for the stage"
+    "label for the stage, always present (but may be empty)"
     label::String
-    total_steps::Int64 = -1
+    "total steps, [`TOTAL_STEPS_UNKNOWN`](@ref) if unknown."
+    total_steps::Int64 = TOTAL_STEPS_UNKNOWN
 end
 
 function _write(io::IO, x::StageSpec)
@@ -54,9 +87,17 @@ function _read(io::IO, ::Type{StageSpec})
     StageSpec(; label = _read(io, String), total_steps = _read(io, Int64))
 end
 
+"""
+A log entry within a stage.
+
+$(FIELDS)
+"""
 Base.@kwdef struct LogEntry
+    "timestap in nanoseconds (cf [`time_ns`](@ref), always present"
     time_ns::UInt64 = time_ns()
-    step::Int64 = -1
+    "step, always provided. special values: `STEP_NEXTSTAGE` for starting a stage, `0` for completing initialization of a stage."
+    step::Int64
+    "distance metric, used for estimation when total steps are not known or applicable."
     distance::Float64 = NaN
 end
 
@@ -71,19 +112,6 @@ function _read(io::IO, ::Type{LogEntry})
     LogEntry(; time_ns = _read(io, UInt64), step = _read(io, Int64), distance = _read(io, Float64))
 end
 
-Base.@kwdef struct NextStage
-    time_ns::UInt64
-end
-
-function _write(io::IO, x::NextStage)
-    write(io, UInt8('N'))
-    _write(io, x.time_ns)
-end
-
-function _read(io::IO, ::Type{NextStage})
-    NextStage(; time_ns = _read(io, UInt64))
-end
-
 ####
 #### reading
 ####
@@ -94,8 +122,6 @@ function _read_entry(io::IO)
         _read(io, StageSpec)
     elseif h == UInt8('L')
         _read(io, LogEntry)
-    elseif h == UInt8('N')
-        _read(io, NextStage)
     else
         error("Don't know how to parse entries beginning with $(Char(h))")
     end
@@ -126,12 +152,12 @@ function parse_file_v1(io::IO)
         entry = _read_entry(io)
         if entry isa StageSpec
             _add_stage(entry)
-        elseif entry isa NextStage
-            l = length(stages)
-            current_stage ≥ l && _add_stage(StageSpec(; label = "stage $(l + 1)"))
-            current_stage += 1
-            _log_entry(LogEntry(; entry.time_ns, step = 0, distance = NaN))
         elseif entry isa LogEntry
+            if entry.step == STEP_NEXTSTAGE
+                l = length(stages)
+                current_stage ≥ l && _add_stage(StageSpec(; label = "stage $(l + 1)"))
+                current_stage += 1
+            end
             _log_entry(entry)
         else
             error("internal error")
@@ -186,15 +212,15 @@ function add_stage(pathname::AbstractString; skip_check = false, label = "", tot
     _write_entry(pathname, StageSpec(; label, total_steps); skip_check)
 end
 
-function log_entry(pathname::AbstractString; skip_check = false, step = -1, distance = NaN)
+function log_entry(pathname::AbstractString; step, skip_check = false, distance = NaN)
     _write_entry(pathname, LogEntry(; time_ns = time_ns(), step, distance); skip_check)
 end
 
 function next_stage(pathname::AbstractString; skip_check::Bool = false)
-    _write_entry(pathname, NextStage(; time_ns = time_ns()); skip_check)
+    _write_entry(pathname, LogEntry(; time_ns = time_ns(), step = STEP_NEXTSTAGE); skip_check)
 end
 
-function add_next_stage(pathname::AbstractString; skip_check = false, label = "", total_steps = -1)
+function add_next_stage(pathname::AbstractString; skip_check = false, label = "", total_steps = TOTAL_STEPS_UNKNOWN)
     add_stage(pathname; label, total_steps, skip_check)
     next_stage(pathname; skip_check = true)
 end
