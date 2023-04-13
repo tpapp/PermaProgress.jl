@@ -4,7 +4,7 @@ Placeholder for a short summary about PermaProgress.
 module PermaProgress
 
 using ArgCheck: @argcheck
-using Documenter: SIGNATURES, FIELDS
+using DocStringExtensions: SIGNATURES, FIELDS
 
 include("logfile.jl")
 include("estimation.jl")
